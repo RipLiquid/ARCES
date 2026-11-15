@@ -14,3 +14,14 @@ if(MSVC)
 else()
     target_compile_options(arces PRIVATE -Wall -Wextra -Wpedantic)
 endif()
+
+include(CTest)
+
+if(BUILD_TESTING)
+    add_test(
+        NAME cli_errors
+        COMMAND "${CMAKE_COMMAND}"
+            "-DPROGRAM=$<TARGET_FILE:arces>"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_errors.cmake"
+    )
+endif()
