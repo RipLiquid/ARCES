@@ -1,0 +1,60 @@
+name: ARCES CI
+
+on:
+  push:
+    branches:
+      - main
+      - ci/build-and-tests
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-build-and-test:
+    name: Windows build and test
+    runs-on: windows-2022
+    timeout-minutes: 60
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Check out ARCES
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up pinned vcpkg
+        run: |
+          $vcpkgCommit = (Get-Content vcpkg-commit.txt -Raw).Trim()
+          if ($vcpkgCommit -notmatch '^[0-9a-f]{40}$') {
+            throw "Invalid vcpkg commit."
+          }
+
+          $vcpkgRoot = Join-Path $env:RUNNER_TEMP "arces-vcpkg"
+
+          git clone https://github.com/microsoft/vcpkg.git "$vcpkgRoot"
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg clone failed." }
+
+          git -C "$vcpkgRoot" checkout --detach "$vcpkgCommit"
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg checkout failed." }
+
+          & "$vcpkgRoot/bootstrap-vcpkg.bat" -disableMetrics
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg bootstrap failed." }
+
+          "VCPKG_ROOT=$vcpkgRoot" >> $env:GITHUB_ENV
+
+      - name: Configure
+        run: |
+          cmake --preset windows-msvc -B build/windows-static "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows-static '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded$<$<CONFIG:Debug>:Debug>' -DBUILD_TESTING=ON
+
+      - name: Build
+        run: cmake --build build/windows-static --config Debug --parallel
+
+      - name: Test
+        run: ctest --test-dir build/windows-static -C Debug --output-on-failure --no-tests=error
