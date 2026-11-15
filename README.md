@@ -176,4 +176,3 @@ Global Modeling and Assimilation Office, & Pawson, S. (2015).
 NASA Goddard Earth Sciences Data and Information Services Center.
 
 https://doi.org/10.5067/AP1B0BA5PD2K
->>>>>>> 4ab80e9 (Add C++ reader for NASA MERRA-2 temperature data v0.01)
