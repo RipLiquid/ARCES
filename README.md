@@ -1,6 +1,4 @@
 # ARCES
-<<<<<<< HEAD
-???
 =======
 
 **Analysis of Regional Change in Earth Systems**
