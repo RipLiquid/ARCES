@@ -1,0 +1,11 @@
+{
+  "name": "arces",
+  "version-string": "0.1.0",
+  "dependencies": [
+    {
+      "name": "netcdf-c",
+      "default-features": false,
+      "features": ["netcdf-4"]
+    }
+  ]
+}
