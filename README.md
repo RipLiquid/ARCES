@@ -1,5 +1,4 @@
 # ARCES
-=======
 
 **Analysis of Regional Change in Earth Systems**
 
