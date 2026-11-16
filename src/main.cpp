@@ -8,7 +8,7 @@
 #include <vector>
 
 // Read a one-dimensional coordinate variable.
-// The caller remains responsible for closing the file.
+// This function does not close the file.
 int readCoordinate(
     int fileId,
     const char* name,
@@ -75,7 +75,7 @@ int main(int argc, char* argv[])
     double targetLatitude = 0.0;
     double targetLongitude = 0.0;
 
-    // Parse the requested coordinates.
+    // Parse command-line coordinates before opening the file.
     try
     {
         const std::string latitudeText = argv[2];
@@ -109,7 +109,7 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    // Open the input file read-only.
+    // Open the dataset read-only.
     int fileId = -1;
     const int openStatus = nc_open(path, NC_NOWRITE, &fileId);
 
@@ -120,18 +120,33 @@ int main(int argc, char* argv[])
         return 1;
     }
 
+    // Shared error handler for operations on the open file.
+    // Every call to this handler is followed immediately by returning.
+    const auto fail = [fileId](
+        const std::string& message,
+        int status = NC_NOERR) -> int
+    {
+        std::cerr << message;
+
+        if (status != NC_NOERR)
+        {
+            std::cerr << ": " << nc_strerror(status);
+        }
+
+        std::cerr << '\n';
+        nc_close(fileId);
+        return 1;
+    };
+
     std::cout << "Successfully opened:\n" << path << '\n';
 
-    // Inspect the dimensions defined in the file.
+    // Inspect the file's dimensions.
     int dimensionCount = 0;
     int inspectionStatus = nc_inq_ndims(fileId, &dimensionCount);
 
     if (inspectionStatus != NC_NOERR)
     {
-        std::cerr << "Could not inspect dimensions: "
-                  << nc_strerror(inspectionStatus) << '\n';
-        nc_close(fileId);
-        return 1;
+        return fail("Could not inspect dimensions", inspectionStatus);
     }
 
     std::cout << "\nDimensions:\n";
@@ -146,25 +161,19 @@ int main(int argc, char* argv[])
 
         if (inspectionStatus != NC_NOERR)
         {
-            std::cerr << "Could not read dimension: "
-                      << nc_strerror(inspectionStatus) << '\n';
-            nc_close(fileId);
-            return 1;
+            return fail("Could not read dimension", inspectionStatus);
         }
 
         std::cout << "  " << name << ": " << length << '\n';
     }
 
-    // Find the 2-metre air temperature variable.
+    // Find the temperature variable.
     int temperatureId = -1;
     inspectionStatus = nc_inq_varid(fileId, "T2M", &temperatureId);
 
     if (inspectionStatus != NC_NOERR)
     {
-        std::cerr << "Could not find T2M: "
-                  << nc_strerror(inspectionStatus) << '\n';
-        nc_close(fileId);
-        return 1;
+        return fail("Could not find T2M", inspectionStatus);
     }
 
     int temperatureDimensionCount = 0;
@@ -181,18 +190,12 @@ int main(int argc, char* argv[])
 
     if (inspectionStatus != NC_NOERR)
     {
-        std::cerr << "Could not inspect T2M: "
-                  << nc_strerror(inspectionStatus) << '\n';
-        nc_close(fileId);
-        return 1;
+        return fail("Could not inspect T2M", inspectionStatus);
     }
 
-    // The reading code expects [time, latitude, longitude].
     if (temperatureDimensionCount != 3)
     {
-        std::cerr << "Expected T2M to have three dimensions.\n";
-        nc_close(fileId);
-        return 1;
+        return fail("Expected T2M to have three dimensions.");
     }
 
     const char* expectedDimensions[] = {"time", "lat", "lon"};
@@ -209,33 +212,36 @@ int main(int argc, char* argv[])
 
         if (inspectionStatus != NC_NOERR)
         {
-            std::cerr << "Could not inspect T2M dimension: "
-                      << nc_strerror(inspectionStatus) << '\n';
-            nc_close(fileId);
-            return 1;
+            return fail("Could not inspect T2M dimension", inspectionStatus);
         }
 
         std::cout << "  " << name << ": " << length << '\n';
 
         if (std::string(name) != expectedDimensions[i] || length == 0)
         {
-            std::cerr << "Unexpected T2M dimension structure.\n";
-            nc_close(fileId);
-            return 1;
+            return fail("Unexpected T2M dimension structure.");
         }
     }
 
-    // Read and validate the temperature units.
+    // Read the temperature units.
+    nc_type unitsType = NC_NAT;
     std::size_t unitsLength = 0;
-    inspectionStatus =
-        nc_inq_attlen(fileId, temperatureId, "units", &unitsLength);
+
+    inspectionStatus = nc_inq_att(
+        fileId,
+        temperatureId,
+        "units",
+        &unitsType,
+        &unitsLength);
 
     if (inspectionStatus != NC_NOERR)
     {
-        std::cerr << "Could not find T2M units: "
-                  << nc_strerror(inspectionStatus) << '\n';
-        nc_close(fileId);
-        return 1;
+        return fail("Could not inspect T2M units", inspectionStatus);
+    }
+
+    if (unitsType != NC_CHAR || unitsLength == 0)
+    {
+        return fail("Expected T2M units to be a nonempty text attribute.");
     }
 
     std::string units(unitsLength, '\0');
@@ -245,22 +251,17 @@ int main(int argc, char* argv[])
 
     if (inspectionStatus != NC_NOERR)
     {
-        std::cerr << "Could not read T2M units: "
-                  << nc_strerror(inspectionStatus) << '\n';
-        nc_close(fileId);
-        return 1;
+        return fail("Could not read T2M units", inspectionStatus);
     }
 
     std::cout << "\nT2M units: " << units << '\n';
 
     if (units != "K")
     {
-        std::cerr << "Expected kelvin but found units: " << units << '\n';
-        nc_close(fileId);
-        return 1;
+        return fail("Expected kelvin but found units: " + units);
     }
 
-    // Load the geographic coordinates.
+    // Load latitude and longitude coordinates.
     std::vector<double> latitudes;
     std::vector<double> longitudes;
 
@@ -268,20 +269,14 @@ int main(int argc, char* argv[])
 
     if (inspectionStatus != NC_NOERR)
     {
-        std::cerr << "Could not read latitudes: "
-                  << nc_strerror(inspectionStatus) << '\n';
-        nc_close(fileId);
-        return 1;
+        return fail("Could not read latitudes", inspectionStatus);
     }
 
     inspectionStatus = readCoordinate(fileId, "lon", longitudes);
 
     if (inspectionStatus != NC_NOERR)
     {
-        std::cerr << "Could not read longitudes: "
-                  << nc_strerror(inspectionStatus) << '\n';
-        nc_close(fileId);
-        return 1;
+        return fail("Could not read longitudes", inspectionStatus);
     }
 
     std::cout << "\nCoordinates loaded:\n"
@@ -290,21 +285,17 @@ int main(int argc, char* argv[])
 
     if (latitudes.empty() || longitudes.empty())
     {
-        std::cerr << "Cannot locate a point: coordinate arrays are empty.\n";
-        nc_close(fileId);
-        return 1;
+        return fail("Cannot locate a point: coordinate arrays are empty.");
     }
 
-    // Find the nearest latitude on this regular grid.
+    // Find the nearest latitude.
     std::size_t nearestLatitudeIndex = 0;
 
     for (std::size_t i = 0; i < latitudes.size(); ++i)
     {
         if (!std::isfinite(latitudes[i]))
         {
-            std::cerr << "Latitude array contains an invalid coordinate.\n";
-            nc_close(fileId);
-            return 1;
+            return fail("Latitude array contains an invalid coordinate.");
         }
 
         if (std::abs(latitudes[i] - targetLatitude) <
@@ -314,7 +305,7 @@ int main(int argc, char* argv[])
         }
     }
 
-    // Use circular distance so -180 and +180 are treated equivalently.
+    // Find the nearest longitude, accounting for wraparound.
     std::size_t nearestLongitudeIndex = 0;
     double nearestLongitudeDistance = 361.0;
 
@@ -322,9 +313,7 @@ int main(int argc, char* argv[])
     {
         if (!std::isfinite(longitudes[i]))
         {
-            std::cerr << "Longitude array contains an invalid coordinate.\n";
-            nc_close(fileId);
-            return 1;
+            return fail("Longitude array contains an invalid coordinate.");
         }
 
         const double distance =
@@ -347,11 +336,12 @@ int main(int argc, char* argv[])
               << "  Longitude: " << longitudes[nearestLongitudeIndex]
               << " (index " << nearestLongitudeIndex << ")\n";
 
-    // Read one temperature from the first time step.
+    // Read the temperature at the first time step.
     const std::size_t position[3] = {
         0,
         nearestLatitudeIndex,
-        nearestLongitudeIndex};
+        nearestLongitudeIndex
+    };
 
     double temperatureKelvin = 0.0;
 
@@ -363,31 +353,47 @@ int main(int argc, char* argv[])
 
     if (inspectionStatus != NC_NOERR)
     {
-        std::cerr << "Could not read temperature: "
-                  << nc_strerror(inspectionStatus) << '\n';
-        nc_close(fileId);
-        return 1;
+        return fail("Could not read temperature", inspectionStatus);
     }
 
-    // Check for missing data before converting the temperature.
-    double fillValue = 0.0;
-    const int fillStatus =
-        nc_get_att_double(fileId, temperatureId, "_FillValue", &fillValue);
+    // Inspect the missing-value marker before reading it into a scalar.
+    nc_type fillType = NC_NAT;
+    std::size_t fillLength = 0;
+
+    const int fillStatus = nc_inq_att(
+        fileId,
+        temperatureId,
+        "_FillValue",
+        &fillType,
+        &fillLength);
 
     if (fillStatus != NC_NOERR && fillStatus != NC_ENOTATT)
     {
-        std::cerr << "Could not inspect missing-data value: "
-                  << nc_strerror(fillStatus) << '\n';
-        nc_close(fileId);
-        return 1;
+        return fail("Could not inspect missing-data value", fillStatus);
+    }
+
+    double fillValue = 0.0;
+
+    if (fillStatus == NC_NOERR)
+    {
+        if (fillLength != 1)
+        {
+            return fail("Expected _FillValue to contain exactly one value.");
+        }
+
+        inspectionStatus =
+            nc_get_att_double(fileId, temperatureId, "_FillValue", &fillValue);
+
+        if (inspectionStatus != NC_NOERR)
+        {
+            return fail("Could not read missing-data value", inspectionStatus);
+        }
     }
 
     if (!std::isfinite(temperatureKelvin) ||
         (fillStatus == NC_NOERR && temperatureKelvin == fillValue))
     {
-        std::cerr << "Temperature is missing at this grid point.\n";
-        nc_close(fileId);
-        return 1;
+        return fail("Temperature is missing at this grid point.");
     }
 
     const double temperatureCelsius = temperatureKelvin - 273.15;
@@ -396,6 +402,64 @@ int main(int argc, char* argv[])
               << "  Kelvin: " << temperatureKelvin << '\n'
               << "  Celsius: " << temperatureCelsius << '\n';
 
+    // Read time metadata while the file is still open.
+    std::vector<double> times;
+    inspectionStatus = readCoordinate(fileId, "time", times);
+
+    if (inspectionStatus != NC_NOERR)
+    {
+        return fail("Could not read time coordinates", inspectionStatus);
+    }
+
+    if (times.empty() || !std::isfinite(times.front()))
+    {
+        return fail("The first time coordinate is missing or invalid.");
+    }
+
+    int timeVariableId = -1;
+    inspectionStatus = nc_inq_varid(fileId, "time", &timeVariableId);
+
+    if (inspectionStatus != NC_NOERR)
+    {
+        return fail("Could not find time variable", inspectionStatus);
+    }
+
+    nc_type timeUnitsType = NC_NAT;
+    std::size_t timeUnitsLength = 0;
+
+    inspectionStatus = nc_inq_att(
+        fileId,
+        timeVariableId,
+        "units",
+        &timeUnitsType,
+        &timeUnitsLength);
+
+    if (inspectionStatus != NC_NOERR)
+    {
+        return fail("Could not inspect time units", inspectionStatus);
+    }
+
+    if (timeUnitsType != NC_CHAR || timeUnitsLength == 0)
+    {
+        return fail("Expected time units to be a nonempty text attribute.");
+    }
+
+    std::string timeUnits(timeUnitsLength, '\0');
+
+    inspectionStatus =
+        nc_get_att_text(fileId, timeVariableId, "units", timeUnits.data());
+
+    if (inspectionStatus != NC_NOERR)
+    {
+        return fail("Could not read time units", inspectionStatus);
+    }
+
+    std::cout << "\nTime metadata:\n"
+              << "  Count: " << times.size() << '\n'
+              << "  First value: " << times.front() << '\n'
+              << "  Units: " << timeUnits << '\n';
+
+    // All reads are finished. Close the file last.
     const int closeStatus = nc_close(fileId);
 
     if (closeStatus != NC_NOERR)
