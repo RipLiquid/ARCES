@@ -5,6 +5,8 @@ on:
     branches:
       - main
       - ci/build-and-tests
+      - 'feature/**'
+      - 'fix/**'
   pull_request:
     branches:
       - main
@@ -51,10 +53,16 @@ jobs:
 
       - name: Configure
         run: |
-          cmake --preset windows-msvc -B build/windows-static "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows-static '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded$<$<CONFIG:Debug>:Debug>' -DBUILD_TESTING=ON
+          cmake --preset windows-static
 
       - name: Build
-        run: cmake --build build/windows-static --config Debug --parallel
+        run: cmake --build --preset static-debug --parallel
 
       - name: Test
-        run: ctest --test-dir build/windows-static -C Debug --output-on-failure --no-tests=error
+        run: ctest --preset static-debug
+
+      - name: Build Release
+        run: cmake --build --preset static-release --parallel
+
+      - name: Test Release
+        run: ctest --preset static-release

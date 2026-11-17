@@ -1,7 +1,8 @@
 {
   "name": "arces",
-  "version-string": "0.1.0",
+  "version-string": "0.3.0",
   "dependencies": [
+    "boost-math",
     {
       "name": "netcdf-c",
       "default-features": false,
