@@ -159,22 +159,6 @@ Additional options:
 
 Exit code `0` indicates a completed operation; `1` indicates invalid input or failure.
 
-## Scientific limits
-
-Annual means require all 12 valid months and are weighted by month length. Partial
-means are labeled separately and never enter the trend fit. No values are imputed.
-
-Trends use OLS with Newey-West HAC uncertainty, Bartlett weights, a finite-sample
-correction, and an approximate Student-t reference. Confidence intervals and p-values
-are exploratory, especially for short or highly persistent series. Examine coverage,
-the annual chart, and sensitivity to lag choice. Significance is not causality.
-
-Time support is deliberately restricted to `minutes since YYYY-MM-DD HH:MM:SS`,
-whole-second offsets, and supported Gregorian calendars over years 1583–9999.
-Source collection identity and monthly averaging semantics are user responsibilities.
-
-See [methods and validation](docs/METHODS.md) for formulas, assumptions, and limits.
-
 ## Testing and project layout
 
 Seven CTest groups cover CLI errors, NetCDF fixture creation/extraction, timestamp
