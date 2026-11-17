@@ -12,6 +12,18 @@
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
       "binaryDir": "${sourceDir}/build/windows-msvc"
+    },
+    {
+      "name": "windows-static",
+      "displayName": "Windows MSVC x64 (static dependencies)",
+      "inherits": "windows-msvc",
+      "binaryDir": "${sourceDir}/build/windows-static",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows-static",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded$<$<CONFIG:Debug>:Debug>",
+        "BUILD_TESTING": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -24,6 +36,32 @@
       "name": "release",
       "configurePreset": "windows-msvc",
       "configuration": "Release"
+    },
+    {
+      "name": "static-debug",
+      "configurePreset": "windows-static",
+      "configuration": "Debug"
+    },
+    {
+      "name": "static-release",
+      "configurePreset": "windows-static",
+      "configuration": "Release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "static-debug",
+      "configurePreset": "windows-static",
+      "configuration": "Debug",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" }
+    },
+    {
+      "name": "static-release",
+      "configurePreset": "windows-static",
+      "configuration": "Release",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" }
     }
   ]
 }

@@ -27,6 +27,7 @@ set(expected_messages
     "Time metadata:"
     "First value: 0"
     "Units: minutes since 1995-01-01 00:30:00"
+    "Decoded timestamp: 1995-01-01T00:30:00"
 )
 
 foreach(expected IN LISTS expected_messages)

@@ -1,473 +1,144 @@
+#include "analysis.hpp"
+#include "netcdf_reader.hpp"
+
+#include <charconv>
 #include <cmath>
-#include <cstddef>
 #include <exception>
 #include <iostream>
-#include <netcdf.h>
+#include <iterator>
 #include <stdexcept>
 #include <string>
-#include <vector>
 
-// Read a one-dimensional coordinate variable.
-// This function does not close the file.
-int readCoordinate(
-    int fileId,
-    const char* name,
-    std::vector<double>& coordinates)
-{
-    int variableId = -1;
-    int status = nc_inq_varid(fileId, name, &variableId);
+namespace {
 
-    if (status != NC_NOERR)
-    {
-        return status;
-    }
-
-    int dimensionCount = 0;
-    status = nc_inq_varndims(fileId, variableId, &dimensionCount);
-
-    if (status != NC_NOERR)
-    {
-        return status;
-    }
-
-    if (dimensionCount != 1)
-    {
-        return NC_EINVAL;
-    }
-
-    int dimensionId = -1;
-    status = nc_inq_vardimid(fileId, variableId, &dimensionId);
-
-    if (status != NC_NOERR)
-    {
-        return status;
-    }
-
-    std::size_t length = 0;
-    status = nc_inq_dimlen(fileId, dimensionId, &length);
-
-    if (status != NC_NOERR)
-    {
-        return status;
-    }
-
-    coordinates.resize(length);
-
-    if (coordinates.empty())
-    {
-        return NC_NOERR;
-    }
-
-    return nc_get_var_double(fileId, variableId, coordinates.data());
+void usage(std::ostream& out) {
+    out << "Usage: arces <netcdf-file> <latitude> <longitude> [output.csv]\n"
+        << "       arces analyze <file-or-directory> <latitude> <longitude> --output <new-directory>\n"
+        << "             [--start YYYY-MM] [--end YYYY-MM] [--min-years N] [--hac-lag N]\n"
+        << "       arces --help | --version\n\n"
+        << "Input records must be monthly T2M means in kelvin on a regular latitude-longitude grid.\n"
+        << "Analysis exports monthly.csv, annual.csv, gaps.csv, and trend.json.\n"
+        << "All 12 valid months are required for an annual mean; default minimum is 10 complete years.\n"
+        << "Trend uncertainty uses approximate Newey-West HAC / Student-t inference.\n"
+        << "Existing output files/directories are never intentionally overwritten.\n";
 }
 
-int main(int argc, char* argv[])
-{
-    if (argc != 4)
-    {
-        std::cerr
-            << "Usage: arces <netcdf-file> <latitude> <longitude>\n";
-        return 1;
+double coordinate(const char* text) {
+    try {
+        std::size_t end = 0;
+        const std::string value(text);
+        const double number = std::stod(value, &end);
+        if (end != value.size()) throw std::invalid_argument("Trailing characters");
+        return number;
+    } catch (const std::exception&) {
+        throw std::invalid_argument("Latitude and longitude must be valid numbers.");
     }
+}
 
-    const char* path = argv[1];
+int integer(const std::string& text, const std::string& name) {
+    int value = 0;
+    const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (result.ec != std::errc{} || result.ptr != text.data() + text.size())
+        throw std::invalid_argument(name + " must be an integer.");
+    return value;
+}
 
-    double targetLatitude = 0.0;
-    double targetLongitude = 0.0;
+void validateCoordinates(double latitude, double longitude) {
+    if (!std::isfinite(latitude) || !std::isfinite(longitude) ||
+        latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180)
+        throw std::invalid_argument("Latitude must be between -90 and 90; longitude must be between -180 and 180.");
+}
 
-    // Parse command-line coordinates before opening the file.
-    try
-    {
-        const std::string latitudeText = argv[2];
-        const std::string longitudeText = argv[3];
-
-        std::size_t latitudeEnd = 0;
-        std::size_t longitudeEnd = 0;
-
-        targetLatitude = std::stod(latitudeText, &latitudeEnd);
-        targetLongitude = std::stod(longitudeText, &longitudeEnd);
-
-        if (latitudeEnd != latitudeText.size() ||
-            longitudeEnd != longitudeText.size())
-        {
-            throw std::invalid_argument("Unexpected characters");
-        }
+int extract(const char* input, double latitude, double longitude, const char* output) {
+    const auto loaded = arces::readFile(input, latitude, longitude);
+    const auto& first = loaded.records.front();
+    if (!first.kelvin) throw std::runtime_error("Temperature is missing at this grid point: " + first.status);
+    std::cout << "Successfully opened:\n" << input << "\n\nDimensions:\n";
+    for (const auto& [name, count] : loaded.dimensions) std::cout << "  " << name << ": " << count << '\n';
+    std::cout << "\nT2M dimension order:\n  time: " << loaded.records.size()
+              << "\n  lat: " << loaded.latitudeCount << "\n  lon: " << loaded.longitudeCount
+              << "\n\nT2M units: K\n\nCoordinates loaded:\n  Latitudes: " << loaded.latitudeCount
+              << "\n  Longitudes: " << loaded.longitudeCount
+              << "\n\nRequested location:\n  Latitude: " << latitude << "\n  Longitude: " << longitude
+              << "\n\nNearest grid point to requested location:\n  Latitude: " << first.latitude
+              << " (index " << loaded.latitudeIndex << ")\n  Longitude: " << first.longitude
+              << " (index " << loaded.longitudeIndex << ")\n"
+              << "\nMonthly mean temperature at selected grid point:\n  Kelvin: " << *first.kelvin
+              << "\n  Celsius: " << *first.kelvin - 273.15
+              << "\n\nTime metadata:\n  Count: " << loaded.records.size() << "\n  First value: " << loaded.firstTime
+              << "\n  Units: " << loaded.timeUnits << "\n  Calendar: "
+              << (loaded.calendar.empty() ? "not specified" : loaded.calendar)
+              << "\n\nDecoded timestamp: " << first.timestamp << '\n';
+    if (loaded.records.size() > 1) std::cout << "Console shows the first record; CSV includes all time steps.\n";
+    if (output) {
+        arces::writeMonthlyCsv(loaded.records, output);
+        std::cout << "CSV saved to: " << output << '\n';
     }
-    catch (const std::exception&)
-    {
-        std::cerr << "Latitude and longitude must be valid numbers.\n";
-        return 1;
-    }
-
-    if (!std::isfinite(targetLatitude) ||
-        !std::isfinite(targetLongitude) ||
-        targetLatitude < -90.0 || targetLatitude > 90.0 ||
-        targetLongitude < -180.0 || targetLongitude > 180.0)
-    {
-        std::cerr << "Latitude must be between -90 and 90; "
-                     "longitude must be between -180 and 180.\n";
-        return 1;
-    }
-
-    // Open the dataset read-only.
-    int fileId = -1;
-    const int openStatus = nc_open(path, NC_NOWRITE, &fileId);
-
-    if (openStatus != NC_NOERR)
-    {
-        std::cerr << "Could not open file: "
-                  << nc_strerror(openStatus) << '\n';
-        return 1;
-    }
-
-    // Shared error handler for operations on the open file.
-    // Every call to this handler is followed immediately by returning.
-    const auto fail = [fileId](
-        const std::string& message,
-        int status = NC_NOERR) -> int
-    {
-        std::cerr << message;
-
-        if (status != NC_NOERR)
-        {
-            std::cerr << ": " << nc_strerror(status);
-        }
-
-        std::cerr << '\n';
-        nc_close(fileId);
-        return 1;
-    };
-
-    std::cout << "Successfully opened:\n" << path << '\n';
-
-    // Inspect the file's dimensions.
-    int dimensionCount = 0;
-    int inspectionStatus = nc_inq_ndims(fileId, &dimensionCount);
-
-    if (inspectionStatus != NC_NOERR)
-    {
-        return fail("Could not inspect dimensions", inspectionStatus);
-    }
-
-    std::cout << "\nDimensions:\n";
-
-    for (int dimensionId = 0; dimensionId < dimensionCount; ++dimensionId)
-    {
-        char name[NC_MAX_NAME + 1] = {};
-        std::size_t length = 0;
-
-        inspectionStatus =
-            nc_inq_dim(fileId, dimensionId, name, &length);
-
-        if (inspectionStatus != NC_NOERR)
-        {
-            return fail("Could not read dimension", inspectionStatus);
-        }
-
-        std::cout << "  " << name << ": " << length << '\n';
-    }
-
-    // Find the temperature variable.
-    int temperatureId = -1;
-    inspectionStatus = nc_inq_varid(fileId, "T2M", &temperatureId);
-
-    if (inspectionStatus != NC_NOERR)
-    {
-        return fail("Could not find T2M", inspectionStatus);
-    }
-
-    int temperatureDimensionCount = 0;
-    int dimensionIds[NC_MAX_VAR_DIMS] = {};
-
-    inspectionStatus = nc_inq_var(
-        fileId,
-        temperatureId,
-        nullptr,
-        nullptr,
-        &temperatureDimensionCount,
-        dimensionIds,
-        nullptr);
-
-    if (inspectionStatus != NC_NOERR)
-    {
-        return fail("Could not inspect T2M", inspectionStatus);
-    }
-
-    if (temperatureDimensionCount != 3)
-    {
-        return fail("Expected T2M to have three dimensions.");
-    }
-
-    const char* expectedDimensions[] = {"time", "lat", "lon"};
-
-    std::cout << "\nT2M dimension order:\n";
-
-    for (int i = 0; i < temperatureDimensionCount; ++i)
-    {
-        char name[NC_MAX_NAME + 1] = {};
-        std::size_t length = 0;
-
-        inspectionStatus =
-            nc_inq_dim(fileId, dimensionIds[i], name, &length);
-
-        if (inspectionStatus != NC_NOERR)
-        {
-            return fail("Could not inspect T2M dimension", inspectionStatus);
-        }
-
-        std::cout << "  " << name << ": " << length << '\n';
-
-        if (std::string(name) != expectedDimensions[i] || length == 0)
-        {
-            return fail("Unexpected T2M dimension structure.");
-        }
-    }
-
-    // Read the temperature units.
-    nc_type unitsType = NC_NAT;
-    std::size_t unitsLength = 0;
-
-    inspectionStatus = nc_inq_att(
-        fileId,
-        temperatureId,
-        "units",
-        &unitsType,
-        &unitsLength);
-
-    if (inspectionStatus != NC_NOERR)
-    {
-        return fail("Could not inspect T2M units", inspectionStatus);
-    }
-
-    if (unitsType != NC_CHAR || unitsLength == 0)
-    {
-        return fail("Expected T2M units to be a nonempty text attribute.");
-    }
-
-    std::string units(unitsLength, '\0');
-
-    inspectionStatus =
-        nc_get_att_text(fileId, temperatureId, "units", units.data());
-
-    if (inspectionStatus != NC_NOERR)
-    {
-        return fail("Could not read T2M units", inspectionStatus);
-    }
-
-    std::cout << "\nT2M units: " << units << '\n';
-
-    if (units != "K")
-    {
-        return fail("Expected kelvin but found units: " + units);
-    }
-
-    // Load latitude and longitude coordinates.
-    std::vector<double> latitudes;
-    std::vector<double> longitudes;
-
-    inspectionStatus = readCoordinate(fileId, "lat", latitudes);
-
-    if (inspectionStatus != NC_NOERR)
-    {
-        return fail("Could not read latitudes", inspectionStatus);
-    }
-
-    inspectionStatus = readCoordinate(fileId, "lon", longitudes);
-
-    if (inspectionStatus != NC_NOERR)
-    {
-        return fail("Could not read longitudes", inspectionStatus);
-    }
-
-    std::cout << "\nCoordinates loaded:\n"
-              << "  Latitudes: " << latitudes.size() << '\n'
-              << "  Longitudes: " << longitudes.size() << '\n';
-
-    if (latitudes.empty() || longitudes.empty())
-    {
-        return fail("Cannot locate a point: coordinate arrays are empty.");
-    }
-
-    // Find the nearest latitude.
-    std::size_t nearestLatitudeIndex = 0;
-
-    for (std::size_t i = 0; i < latitudes.size(); ++i)
-    {
-        if (!std::isfinite(latitudes[i]))
-        {
-            return fail("Latitude array contains an invalid coordinate.");
-        }
-
-        if (std::abs(latitudes[i] - targetLatitude) <
-            std::abs(latitudes[nearestLatitudeIndex] - targetLatitude))
-        {
-            nearestLatitudeIndex = i;
-        }
-    }
-
-    // Find the nearest longitude, accounting for wraparound.
-    std::size_t nearestLongitudeIndex = 0;
-    double nearestLongitudeDistance = 361.0;
-
-    for (std::size_t i = 0; i < longitudes.size(); ++i)
-    {
-        if (!std::isfinite(longitudes[i]))
-        {
-            return fail("Longitude array contains an invalid coordinate.");
-        }
-
-        const double distance =
-            std::abs(std::remainder(longitudes[i] - targetLongitude, 360.0));
-
-        if (distance < nearestLongitudeDistance)
-        {
-            nearestLongitudeIndex = i;
-            nearestLongitudeDistance = distance;
-        }
-    }
-
-    std::cout << "\nRequested location:\n"
-              << "  Latitude: " << targetLatitude << '\n'
-              << "  Longitude: " << targetLongitude << '\n';
-
-    std::cout << "\nNearest grid point to requested location:\n"
-              << "  Latitude: " << latitudes[nearestLatitudeIndex]
-              << " (index " << nearestLatitudeIndex << ")\n"
-              << "  Longitude: " << longitudes[nearestLongitudeIndex]
-              << " (index " << nearestLongitudeIndex << ")\n";
-
-    // Read the temperature at the first time step.
-    const std::size_t position[3] = {
-        0,
-        nearestLatitudeIndex,
-        nearestLongitudeIndex
-    };
-
-    double temperatureKelvin = 0.0;
-
-    inspectionStatus = nc_get_var1_double(
-        fileId,
-        temperatureId,
-        position,
-        &temperatureKelvin);
-
-    if (inspectionStatus != NC_NOERR)
-    {
-        return fail("Could not read temperature", inspectionStatus);
-    }
-
-    // Inspect the missing-value marker before reading it into a scalar.
-    nc_type fillType = NC_NAT;
-    std::size_t fillLength = 0;
-
-    const int fillStatus = nc_inq_att(
-        fileId,
-        temperatureId,
-        "_FillValue",
-        &fillType,
-        &fillLength);
-
-    if (fillStatus != NC_NOERR && fillStatus != NC_ENOTATT)
-    {
-        return fail("Could not inspect missing-data value", fillStatus);
-    }
-
-    double fillValue = 0.0;
-
-    if (fillStatus == NC_NOERR)
-    {
-        if (fillLength != 1)
-        {
-            return fail("Expected _FillValue to contain exactly one value.");
-        }
-
-        inspectionStatus =
-            nc_get_att_double(fileId, temperatureId, "_FillValue", &fillValue);
-
-        if (inspectionStatus != NC_NOERR)
-        {
-            return fail("Could not read missing-data value", inspectionStatus);
-        }
-    }
-
-    if (!std::isfinite(temperatureKelvin) ||
-        (fillStatus == NC_NOERR && temperatureKelvin == fillValue))
-    {
-        return fail("Temperature is missing at this grid point.");
-    }
-
-    const double temperatureCelsius = temperatureKelvin - 273.15;
-
-    std::cout << "\nMonthly mean temperature at selected grid point:\n"
-              << "  Kelvin: " << temperatureKelvin << '\n'
-              << "  Celsius: " << temperatureCelsius << '\n';
-
-    // Read time metadata while the file is still open.
-    std::vector<double> times;
-    inspectionStatus = readCoordinate(fileId, "time", times);
-
-    if (inspectionStatus != NC_NOERR)
-    {
-        return fail("Could not read time coordinates", inspectionStatus);
-    }
-
-    if (times.empty() || !std::isfinite(times.front()))
-    {
-        return fail("The first time coordinate is missing or invalid.");
-    }
-
-    int timeVariableId = -1;
-    inspectionStatus = nc_inq_varid(fileId, "time", &timeVariableId);
-
-    if (inspectionStatus != NC_NOERR)
-    {
-        return fail("Could not find time variable", inspectionStatus);
-    }
-
-    nc_type timeUnitsType = NC_NAT;
-    std::size_t timeUnitsLength = 0;
-
-    inspectionStatus = nc_inq_att(
-        fileId,
-        timeVariableId,
-        "units",
-        &timeUnitsType,
-        &timeUnitsLength);
-
-    if (inspectionStatus != NC_NOERR)
-    {
-        return fail("Could not inspect time units", inspectionStatus);
-    }
-
-    if (timeUnitsType != NC_CHAR || timeUnitsLength == 0)
-    {
-        return fail("Expected time units to be a nonempty text attribute.");
-    }
-
-    std::string timeUnits(timeUnitsLength, '\0');
-
-    inspectionStatus =
-        nc_get_att_text(fileId, timeVariableId, "units", timeUnits.data());
-
-    if (inspectionStatus != NC_NOERR)
-    {
-        return fail("Could not read time units", inspectionStatus);
-    }
-
-    std::cout << "\nTime metadata:\n"
-              << "  Count: " << times.size() << '\n'
-              << "  First value: " << times.front() << '\n'
-              << "  Units: " << timeUnits << '\n';
-
-    // All reads are finished. Close the file last.
-    const int closeStatus = nc_close(fileId);
-
-    if (closeStatus != NC_NOERR)
-    {
-        std::cerr << "Could not close file: "
-                  << nc_strerror(closeStatus) << '\n';
-        return 1;
-    }
-
     return 0;
+}
+
+}
+
+int main(int argc, char* argv[]) {
+    try {
+        if (argc == 2 && std::string(argv[1]) == "--help") { usage(std::cout); return 0; }
+        if (argc == 2 && std::string(argv[1]) == "--version") { std::cout << "ARCES 0.3.0\n"; return 0; }
+        const bool analysisMode = argc > 1 && std::string(argv[1]) == "analyze";
+        if ((!analysisMode && argc != 4 && argc != 5) || (analysisMode && argc < 7)) {
+            usage(std::cerr); return 1;
+        }
+        const int base = analysisMode ? 2 : 1;
+        const double latitude = coordinate(argv[base + 1]);
+        const double longitude = coordinate(argv[base + 2]);
+        validateCoordinates(latitude, longitude);
+        if (!analysisMode) return extract(argv[1], latitude, longitude, argc == 5 ? argv[4] : nullptr);
+
+        arces::Options options;
+        std::filesystem::path output;
+        bool haveOutput = false, haveStart = false, haveEnd = false, haveMinimum = false, haveLag = false;
+        for (int i = 5; i < argc; i += 2) {
+            const std::string flag = argv[i];
+            if (i + 1 >= argc) throw std::invalid_argument("Missing value for " + flag);
+            const std::string value = argv[i + 1];
+            if (flag == "--output" && !haveOutput) { output = value; haveOutput = true; }
+            else if (flag == "--start" && !haveStart) { options.start = arces::parseMonth(value); haveStart = true; }
+            else if (flag == "--end" && !haveEnd) { options.end = arces::parseMonth(value); haveEnd = true; }
+            else if (flag == "--min-years" && !haveMinimum) { options.minimumYears = integer(value, flag); haveMinimum = true; }
+            else if (flag == "--hac-lag" && !haveLag) { options.hacLag = integer(value, flag); haveLag = true; }
+            else throw std::invalid_argument("Unknown or repeated option: " + flag);
+        }
+        if (!haveOutput || output.empty()) throw std::invalid_argument("Analysis requires --output <new-directory>.");
+        if (options.minimumYears < 3) throw std::invalid_argument("Minimum complete years must be at least 3.");
+        if (options.hacLag && *options.hacLag < 0) throw std::invalid_argument("HAC lag must not be negative.");
+        if (options.start && options.end && *options.start > *options.end)
+            throw std::invalid_argument("Start month must not follow end month.");
+        if (std::filesystem::exists(output)) throw std::runtime_error("Output directory already exists: " + output.string());
+        const auto inputs = arces::findInputs(argv[2]);
+        std::vector<arces::Record> records;
+        for (const auto& input : inputs) {
+            try {
+                auto loaded = arces::readFile(input, latitude, longitude);
+                records.insert(records.end(), std::make_move_iterator(loaded.records.begin()), std::make_move_iterator(loaded.records.end()));
+            } catch (const std::exception& error) {
+                throw std::runtime_error(input.string() + ": " + error.what());
+            }
+        }
+        const auto report = arces::analyze(std::move(records), options);
+        arces::writeReport(report, output, latitude, longitude, inputs.size(), options);
+        std::cout << "Processed " << inputs.size() << " file(s), " << report.monthly.size() << " monthly records.\n"
+                  << "Window: " << arces::monthText(report.start) << " to " << arces::monthText(report.end) << '\n'
+                  << "Absent months: " << report.absentMonths.size() << "; complete years: " << report.trend.n << '\n';
+        if (report.trend.available) {
+            const auto& trend = report.trend;
+            std::cout << "Trend: " << trend.slope * 10 << " C/decade\n"
+                      << "Approximate 95% HAC interval: [" << trend.lower * 10 << ", " << trend.upper * 10 << "] C/decade\n"
+                      << "Approximate p-value: " << trend.p << "; HAC lag: " << trend.lag << " calendar years\n"
+                      << "Exploratory result; review coverage and assumptions in trend.json.\n";
+        } else std::cout << "Trend unavailable: " << report.trend.reason << '\n';
+        std::cout << "Results: " << output.string() << '\n';
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
 }
