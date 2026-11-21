@@ -184,6 +184,6 @@ Global Modeling and Assimilation Office & Pawson, S. (2015). *MERRA-2 monthly me
 single-level diagnostics, V5.12.4*. NASA Goddard Earth Sciences Data and Information
 Services Center. https://doi.org/10.5067/AP1B0BA5PD2K
 
-NetCDF/HDF5 and Boost Math are external dependencies with their own licenses. This
-repository does not currently grant a project-wide open-source license; choose one
-before distributing it as licensed open-source software.
+ARCES is licensed under the [MIT License](LICENSE).
+
+NetCDF/HDF5 and Boost Math are external dependencies with their own licenses.
