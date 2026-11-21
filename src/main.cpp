@@ -1,5 +1,8 @@
+#include "version.hpp"
 #include "analysis.hpp"
 #include "netcdf_reader.hpp"
+#include "regional.hpp"
+#include <set>
 
 #include <charconv>
 #include <cmath>
@@ -14,6 +17,9 @@ namespace {
 void usage(std::ostream& out) {
     out << "Usage: arces <netcdf-file> <latitude> <longitude> [output.csv]\n"
         << "       arces analyze <file-or-directory> <latitude> <longitude> --output <new-directory>\n"
+        << "             [--start YYYY-MM] [--end YYYY-MM] [--min-years N] [--hac-lag N]\n"
+        << "       arces region <input> --boundary <WGS84.geojson> --output <new-directory>\n"
+        << "             [--feature NAME] [--south S --north N --west W --east E]\n"
         << "             [--start YYYY-MM] [--end YYYY-MM] [--min-years N] [--hac-lag N]\n"
         << "       arces --help | --version\n\n"
         << "Input records must be monthly T2M means in kelvin on a regular latitude-longitude grid.\n"
@@ -77,12 +83,61 @@ int extract(const char* input, double latitude, double longitude, const char* ou
     return 0;
 }
 
+
+int region(int argc, char* argv[]) {
+    if (argc < 3) throw std::invalid_argument("region requires an input file or directory.");
+    std::filesystem::path output, boundaryPath;
+    std::string feature;
+    arces::Options options;
+    arces::GeographicBounds bounds;
+    std::set<std::string> seen;
+    for (int i = 3; i < argc; i += 2) {
+        const std::string flag = argv[i];
+        if (i + 1 >= argc) throw std::invalid_argument("Missing value for " + flag);
+        if (!seen.insert(flag).second) throw std::invalid_argument("Repeated option: " + flag);
+        const std::string value = argv[i + 1];
+        if (flag == "--output") output = value;
+        else if (flag == "--boundary") boundaryPath = value;
+        else if (flag == "--feature") feature = value;
+        else if (flag == "--south") bounds.south = coordinate(value.c_str());
+        else if (flag == "--north") bounds.north = coordinate(value.c_str());
+        else if (flag == "--west") bounds.west = coordinate(value.c_str());
+        else if (flag == "--east") bounds.east = coordinate(value.c_str());
+        else if (flag == "--start") options.start = arces::parseMonth(value);
+        else if (flag == "--end") options.end = arces::parseMonth(value);
+        else if (flag == "--min-years") options.minimumYears = integer(value, flag);
+        else if (flag == "--hac-lag") options.hacLag = integer(value, flag);
+        else throw std::invalid_argument("Unknown option: " + flag);
+    }
+    if (output.empty()) throw std::invalid_argument("Regional analysis requires --output <new-directory>.");
+    if (std::filesystem::exists(output)) throw std::runtime_error("Output directory already exists: " + output.string());
+    std::optional<arces::Boundary> boundary;
+    if (!boundaryPath.empty()) boundary = arces::Boundary::load(boundaryPath, feature);
+    else if (!feature.empty()) throw std::invalid_argument("--feature requires --boundary.");
+    const auto count = seen.count("--south") + seen.count("--north") + seen.count("--west") + seen.count("--east");
+    if (count != 0 && count != 4) throw std::invalid_argument("Supply all four bounds: --south --north --west --east.");
+    if (!count) {
+        if (!boundary) throw std::invalid_argument("Regional analysis requires a boundary or all four bounds.");
+        bounds = boundary->bounds();
+    }
+    const auto report = arces::analyzeRegion(argv[2], bounds, options, boundary ? &*boundary : nullptr);
+    arces::writeRegionalReport(report, output, options, boundaryPath, boundary ? boundary->name() : "");
+    std::cout << "Processed " << report.inputFiles << " file(s); selected " << report.cells.size() << " grid cells.\n"
+              << "Window: " << arces::monthText(report.start) << " to " << arces::monthText(report.end) << '\n'
+              << "Per-cell trends and coverage: " << (output / "regional.csv").string() << '\n'
+              << "Selected centres: " << (output / "cells.geojson").string() << '\n'
+              << "Open report: " << (output / "report.html").string() << '\n'
+              << "Exploratory per-cell estimates; no province-wide average or multiple-testing correction.\n";
+    return 0;
+}
+
 }
 
 int main(int argc, char* argv[]) {
     try {
         if (argc == 2 && std::string(argv[1]) == "--help") { usage(std::cout); return 0; }
-        if (argc == 2 && std::string(argv[1]) == "--version") { std::cout << "ARCES 0.3.0\n"; return 0; }
+        if (argc == 2 && std::string(argv[1]) == "--version") { std::cout << "ARCES " ARCES_VERSION "\n"; return 0; }
+        if (argc > 1 && std::string(argv[1]) == "region") return region(argc, argv);
         const bool analysisMode = argc > 1 && std::string(argv[1]) == "analyze";
         if ((!analysisMode && argc != 4 && argc != 5) || (analysisMode && argc < 7)) {
             usage(std::cerr); return 1;

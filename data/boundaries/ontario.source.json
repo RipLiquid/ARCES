@@ -1,0 +1,20 @@
+{
+  "dataset": "geoBoundaries gbOpen CAN ADM1 simplified",
+  "boundary_id": "CAN-ADM1-82249235",
+  "upstream_revision": "41af8f1",
+  "source_url": "https://media.githubusercontent.com/media/wmgeolab/geoBoundaries/41af8f1/releaseData/gbOpen/CAN/ADM1/geoBoundaries-CAN-ADM1_simplified.geojson",
+  "source_sha256": "0c9e4fc56c8b9ce958960ffabd1556fbe7c3ec0deeea346a2b5b7dff05e35449",
+  "boundary_sha256": "dc2a113d6fa31bd11fadbac1c60a5aabb5ba95a9ddf8d2de49a156e0055ea207",
+  "feature": "Ontario",
+  "changes": "Extracted one unmodified feature from the simplified Canada FeatureCollection; serialized as compact GeoJSON.",
+  "boundary_year_represented": "2023 (as reported by geoBoundaries metadata; not a boundary for each climate observation year)",
+  "upstream_source": "Statistics Canada (StatCan)",
+  "upstream_source_url": "https://www12.statcan.gc.ca/census-recensement/2011/geo/bound-limit/bound-limit-2016-eng.cfm",
+  "upstream_license_reported": "Open Government Canada 2.0 / Statistics Canada Open Licence",
+  "geoboundaries_license": "CC BY 4.0",
+  "geoboundaries_license_url": "https://creativecommons.org/licenses/by/4.0/",
+  "statistics_canada_license_url": "https://www.statcan.gc.ca/en/terms-conditions/open-licence",
+  "citation": "Runfola, D. et al. (2020), geoBoundaries: A global database of political administrative boundaries. PLoS ONE 15(4): e0231866. https://doi.org/10.1371/journal.pone.0231866",
+  "attribution": "Source: Statistics Canada, provincial/territorial boundary data, distributed through geoBoundaries CAN ADM1 (metadata reference year 2023). Adapted for ARCES; this does not constitute endorsement by Statistics Canada. geoBoundaries: https://www.geoboundaries.org/",
+  "limitations": "Simplified administrative geometry. Cell-centre selection near borders may differ from full-resolution boundaries. No land-only mask or area weighting."
+}

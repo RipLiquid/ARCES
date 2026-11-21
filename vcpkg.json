@@ -1,12 +1,16 @@
 {
   "name": "arces",
-  "version-string": "0.3.0",
+  "version-string": "0.4.0-dev",
   "dependencies": [
+    "boost-geometry",
+    "nlohmann-json",
     "boost-math",
     {
       "name": "netcdf-c",
       "default-features": false,
-      "features": ["netcdf-4"]
+      "features": [
+        "netcdf-4"
+      ]
     }
   ]
 }

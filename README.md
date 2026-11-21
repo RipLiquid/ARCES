@@ -26,7 +26,11 @@ through trend analysis:
 - Export CSV/JSON plus an offline HTML report and SVG chart.
 - Test the entire pipeline with synthetic data; no NASA account is needed for tests.
 
-Province-wide GIS processing, boundary clipping, and interactive maps are future work.
+Regional reading, per-cell trends and Ontario cell-centre selection are now available
+in **0.4.0-dev**. See [regional analysis](docs/REGIONAL.md) for commands, outputs,
+boundary attribution and limitations. A static SVG trend map and offline regional
+report are included. Interactive maps remain future work. This development
+milestone does not calculate a province-wide average.
 
 ## Quick start: Windows
 
@@ -161,10 +165,10 @@ Exit code `0` indicates a completed operation; `1` indicates invalid input or fa
 
 ## Testing and project layout
 
-Seven CTest groups cover CLI errors, NetCDF fixture creation/extraction, timestamp
-conversion, annual/statistical calculations, and full multi-file exports. Within
+Nine CTest groups cover CLI errors, NetCDF fixture creation/extraction, timestamp
+conversion, annual/statistical calculations, full multi-file exports, regional reading/trends, and Ontario boundary selection. Within
 those groups are checks for leap years, missing months, duplicates, fill markers,
-packing, output preservation, known trends, and independent regression constants.
+packing, output preservation, known trends, independent regression constants, polygon holes/islands, and regional-to-point agreement.
 
 GitHub Actions builds and tests Debug and Release on Windows. Its job name remains
 **Windows build and test** so it can be required by the main-branch ruleset.

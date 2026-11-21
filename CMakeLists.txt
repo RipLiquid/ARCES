@@ -1,7 +1,9 @@
 cmake_minimum_required(VERSION 3.24)
-project(ARCES VERSION 0.3.0 LANGUAGES CXX)
+project(ARCES VERSION 0.4.0 LANGUAGES CXX)
 
 find_package(netCDF CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
+find_path(BOOST_GEOMETRY_INCLUDE_DIR boost/geometry.hpp REQUIRED)
 find_path(BOOST_MATH_INCLUDE_DIR boost/math/distributions/students_t.hpp REQUIRED)
 
 function(arces_warnings target)
@@ -13,11 +15,11 @@ function(arces_warnings target)
     endif()
 endfunction()
 
-add_library(arces_core STATIC src/analysis.cpp src/netcdf_reader.cpp)
+add_library(arces_core STATIC src/analysis.cpp src/netcdf_reader.cpp src/boundary.cpp src/regional.cpp src/regional_map.cpp)
 target_compile_features(arces_core PUBLIC cxx_std_20)
 target_include_directories(arces_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_include_directories(arces_core SYSTEM PRIVATE "${BOOST_MATH_INCLUDE_DIR}")
-target_link_libraries(arces_core PRIVATE netCDF::netcdf)
+target_include_directories(arces_core SYSTEM PRIVATE "${BOOST_MATH_INCLUDE_DIR}" "${BOOST_GEOMETRY_INCLUDE_DIR}")
+target_link_libraries(arces_core PRIVATE netCDF::netcdf nlohmann_json::nlohmann_json)
 arces_warnings(arces_core)
 
 add_executable(arces src/main.cpp)
@@ -62,4 +64,20 @@ if(BUILD_TESTING)
         "-DPROGRAM=$<TARGET_FILE:arces>" "-DROOT=${CMAKE_CURRENT_BINARY_DIR}/series-fixture"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/series_test.cmake")
     set_tests_properties(series_csv_and_trend PROPERTIES FIXTURES_REQUIRED series_data TIMEOUT 60)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(regional_test tests/regional_test.cpp)
+    target_link_libraries(regional_test PRIVATE arces_core netCDF::netcdf nlohmann_json::nlohmann_json)
+    arces_warnings(regional_test)
+    add_test(NAME regional_reader_boundary_and_trends COMMAND regional_test "${CMAKE_CURRENT_BINARY_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/data/boundaries/ontario.geojson")
+    set_tests_properties(regional_reader_boundary_and_trends PROPERTIES TIMEOUT 60)
+endif()
+
+if(BUILD_TESTING)
+    add_test(NAME regional_cli COMMAND "${CMAKE_COMMAND}"
+        "-DPROGRAM=$<TARGET_FILE:arces>" "-DROOT=${CMAKE_CURRENT_BINARY_DIR}/series-fixture"
+        "-DBOUNDARY=${CMAKE_CURRENT_SOURCE_DIR}/data/boundaries/ontario.geojson"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/regional_cli.cmake")
+    set_tests_properties(regional_cli PROPERTIES FIXTURES_REQUIRED series_data TIMEOUT 120)
 endif()

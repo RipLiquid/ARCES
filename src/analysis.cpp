@@ -1,3 +1,4 @@
+#include "version.hpp"
 #include "analysis.hpp"
 
 #include <boost/math/distributions/students_t.hpp>
@@ -317,7 +318,7 @@ void writeReport(const Report& report, const std::filesystem::path& directory,
 
     const auto& trend = report.trend;
     auto json = outputFile(directory / "trend.json");
-    json << "{\n  \"schema_version\": 1,\n  \"software_version\": \"0.3.0\",\n"
+    json << "{\n  \"schema_version\": 1,\n  \"software_version\": \"" ARCES_VERSION "\",\n"
          << "  \"variable\": \"T2M\",\n  \"source_description\": \"User-supplied monthly NetCDF files; file collection identity is not independently authenticated\",\n"
          << "  \"requested_latitude\": " << requestedLatitude << ",\n  \"requested_longitude\": " << requestedLongitude
          << ",\n  \"selected_latitude\": " << report.monthly.front().latitude
