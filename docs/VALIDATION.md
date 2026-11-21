@@ -1,4 +1,43 @@
-# Validation record — 0.3.0 development milestone
+# Validation records
+
+## 0.4.0-dev — Regional reader through Ontario selection
+
+On 2026-11-21, all nine CTest groups passed in Debug and Release on Windows/MSVC.
+The seven previous groups remain enabled. Added groups:
+
+- `regional_reader_boundary_and_trends`: six-cell packed NetCDF fixture, fill and
+  missing markers, raw valid range, timestamps, exact bounds, empty and invalid
+  bounds, descending latitude, normalized and noncontiguous longitude selections,
+  duplicate coordinates/months, changing grids, date windows, known per-cell slopes,
+  incomplete years, insufficient cells, GeoJSON/CSV output, polygon holes/edges/
+  islands, invalid polygons, named features, and actual Ontario location checks.
+- `regional_cli`: bounding-box and Ontario runs, equality with point analysis,
+  coverage gaps, null insufficient trends, boundary provenance copying, malformed
+  files, invalid/repeated options, date windows, and output preservation.
+
+A local real-data run used the user's existing 360 MERRA-2 monthly files for
+1995-01 through 2024-12 and the bundled pinned Ontario boundary. It selected 398
+grid-cell centres. All 398 had 360 valid monthly records and 30 complete years.
+Python's independent `statistics.linear_regression` reproduced each cell's slope
+from the exported annual means within 1e-10 C/decade. Three sampled cells also
+matched the single-location CLI's slope, approximate interval and p-value. The
+last comparison checks consistency; it is not independent validation of HAC inference.
+
+The earlier Toronto example centre (43.5, -79.375) is outside the supplied boundary
+geometry and is therefore excluded. The nearest selected centre to the requested
+Toronto coordinates is (44, -79.375). This illustrates why boundary-selected cells
+and nearest-point extraction are different spatial queries.
+
+Static SVG and offline HTML exports are tested for one marker per selected cell,
+warming/cooling/zero colours, interval and insufficient-data markers, singleton
+bounds, polygon hole paths, escaped attribution and export links. The real 398-cell
+Ontario map was rendered to PNG and visually inspected for layout and legibility.
+This visual QA is not independent verification of the projection.
+
+No province-wide average, causal attribution or multiple-testing correction was
+validated or implemented in this milestone. See [regional methods](REGIONAL.md).
+
+## 0.3.0 development milestone
 
 Verified locally on Windows x64 with MSVC 19.44.35230, CMake 4.4.4, NetCDF 4.9.3,
 and Boost Math 1.92.0. Both Debug and Release builds completed successfully.

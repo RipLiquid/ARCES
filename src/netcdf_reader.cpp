@@ -122,99 +122,191 @@ bool matches(double value, const std::vector<double>& markers) {
     });
 }
 
+
+struct Input {
+    File file;
+    int temperature = -1;
+    std::vector<double> latitudes, longitudes, times, fill, missing, validRange;
+    std::vector<std::string> timestamps;
+    std::string timeUnits, calendar;
+    double validMin = 0, validMax = 0, scale = 1, offset = 0;
+
+    explicit Input(const std::filesystem::path& path) : file(path) {
+        temperature = variable(file.id, "T2M");
+        int rank = 0;
+        check(nc_inq_varndims(file.id, temperature, &rank), "Could not inspect T2M rank");
+        if (rank != 3) throw std::runtime_error("Expected T2M dimensions [time, lat, lon].");
+        int ids[3]{};
+        check(nc_inq_vardimid(file.id, temperature, ids), "Could not inspect T2M dimensions");
+        const char* expected[] = {"time", "lat", "lon"};
+        for (int i = 0; i < 3; ++i) {
+            char name[NC_MAX_NAME + 1]{};
+            check(nc_inq_dimname(file.id, ids[i], name), "Could not read dimension name");
+            if (std::string(name) != expected[i]) throw std::runtime_error("Expected T2M dimensions [time, lat, lon].");
+        }
+        if (textAttribute(file.id, temperature, "units") != "K")
+            throw std::runtime_error("Expected T2M temperature units K (kelvin).");
+
+        latitudes = coordinate(file.id, variable(file.id, "lat"), ids[1]);
+        longitudes = coordinate(file.id, variable(file.id, "lon"), ids[2]);
+        const int timeId = variable(file.id, "time");
+        times = coordinate(file.id, timeId, ids[0]);
+
+        timeUnits = textAttribute(file.id, timeId, "units");
+        calendar = textAttribute(file.id, timeId, "calendar", false);
+
+        nc_type temperatureType;
+        check(nc_inq_vartype(file.id, temperature, &temperatureType), "Could not inspect T2M type");
+        fill = numbers(file.id, temperature, "_FillValue");
+        if (fill.empty()) fill.push_back(defaultFill(temperatureType));
+        if (fill.size() != 1) throw std::runtime_error("Expected one _FillValue.");
+        missing = numbers(file.id, temperature, "missing_value");
+        const auto timeMissing = numbers(file.id, timeId, "missing_value");
+        const auto timeFill = numbers(file.id, timeId, "_FillValue");
+        validRange = numbers(file.id, temperature, "valid_range");
+        if (!validRange.empty() && (validRange.size() != 2 || !std::isfinite(validRange[0]) ||
+            !std::isfinite(validRange[1]) || validRange[0] > validRange[1]))
+            throw std::runtime_error("Invalid T2M valid_range.");
+        validMin = scalar(file.id, temperature, "valid_min", -std::numeric_limits<double>::infinity());
+        validMax = scalar(file.id, temperature, "valid_max", std::numeric_limits<double>::infinity());
+        scale = scalar(file.id, temperature, "scale_factor", 1);
+        offset = scalar(file.id, temperature, "add_offset", 0);
+        if (validMin > validMax) throw std::runtime_error("T2M valid_min exceeds valid_max.");
+
+
+        for (double latitude : latitudes)
+            if (latitude < -90 || latitude > 90) throw std::runtime_error("Latitude outside [-90, 90].");
+        for (double longitude : longitudes)
+            if (longitude < -180 || longitude > 360) throw std::runtime_error("Unsupported longitude coordinate range.");
+        for (double time : times) {
+            if (matches(time, timeFill) || matches(time, timeMissing))
+                throw std::runtime_error("Missing time coordinate.");
+            timestamps.push_back(decodeTimestamp(time, timeUnits, calendar));
+        }
+    }
+
+    Record record(double raw, std::size_t t, std::size_t lat, std::size_t lon,
+                  const std::string& source) const {
+        Record row;
+        row.timestamp = timestamps[t];
+        row.date = parseMonth(row.timestamp.substr(0, 7));
+        row.latitude = latitudes[lat];
+        row.longitude = std::remainder(longitudes[lon], 360.0);
+        row.source = source;
+        const bool outside = raw < validMin || raw > validMax ||
+            (!validRange.empty() && (raw < validRange[0] || raw > validRange[1]));
+        if (!std::isfinite(raw) || matches(raw, fill) || matches(raw, missing)) row.status = "missing_value";
+        else if (outside) row.status = "outside_valid_range";
+        else {
+            const double value = raw * scale + offset;
+            if (!std::isfinite(value) || value < 0) row.status = "invalid_temperature";
+            else row.kelvin = value;
+        }
+        return row;
+    }
+};
+
+void uniqueAxis(const std::vector<double>& values, bool longitude) {
+    std::vector<double> sorted = values;
+    if (longitude)
+        for (auto& value : sorted) value = std::remainder(value, 360.0);
+    // +180 and -180 are the same geographic meridian.
+    for (auto& value : sorted) if (longitude && value == 180) value = -180;
+    std::sort(sorted.begin(), sorted.end());
+    if (std::adjacent_find(sorted.begin(), sorted.end()) != sorted.end())
+        throw std::runtime_error("Duplicate grid coordinates are not supported for regional reads.");
+}
+
+}
+
+void validateBounds(const GeographicBounds& b) {
+    if (!std::isfinite(b.south) || !std::isfinite(b.north) ||
+        !std::isfinite(b.west) || !std::isfinite(b.east) ||
+        b.south < -90 || b.north > 90 || b.south > b.north ||
+        b.west < -180 || b.east > 180 || b.west > b.east)
+        throw std::invalid_argument("Invalid geographic bounds; use south <= north and west <= east in degrees (no antimeridian crossing).");
 }
 
 LoadedFile readFile(const std::filesystem::path& path, double latitude, double longitude) {
-    File file(path);
+    if (!std::isfinite(latitude) || !std::isfinite(longitude) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180)
+        throw std::invalid_argument("Invalid requested coordinates.");
+    Input input(path);
     LoadedFile loaded;
     int dimensions = 0;
-    check(nc_inq_ndims(file.id, &dimensions), "Could not inspect dimensions");
+    check(nc_inq_ndims(input.file.id, &dimensions), "Could not inspect dimensions");
     for (int i = 0; i < dimensions; ++i) {
         char name[NC_MAX_NAME + 1]{};
         std::size_t count = 0;
-        check(nc_inq_dim(file.id, i, name, &count), "Could not read dimension");
+        check(nc_inq_dim(input.file.id, i, name, &count), "Could not read dimension");
         loaded.dimensions.emplace_back(name, count);
     }
-    const int temperature = variable(file.id, "T2M");
-    int rank = 0;
-    check(nc_inq_varndims(file.id, temperature, &rank), "Could not inspect T2M rank");
-    if (rank != 3) throw std::runtime_error("Expected T2M dimensions [time, lat, lon].");
-    int ids[3]{};
-    check(nc_inq_vardimid(file.id, temperature, ids), "Could not inspect T2M dimensions");
-    const char* expected[] = {"time", "lat", "lon"};
-    for (int i = 0; i < 3; ++i) {
-        char name[NC_MAX_NAME + 1]{};
-        check(nc_inq_dimname(file.id, ids[i], name), "Could not read dimension name");
-        if (std::string(name) != expected[i]) throw std::runtime_error("Expected T2M dimensions [time, lat, lon].");
+    loaded.latitudeCount = input.latitudes.size();
+    loaded.longitudeCount = input.longitudes.size();
+    loaded.timeUnits = input.timeUnits;
+    loaded.calendar = input.calendar;
+    loaded.firstTime = input.times.front();
+    double bestLat = std::numeric_limits<double>::infinity(), bestLon = bestLat;
+    for (std::size_t i = 0; i < input.latitudes.size(); ++i) {
+        const double distance = std::abs(input.latitudes[i] - latitude);
+        if (distance < bestLat) { bestLat = distance; loaded.latitudeIndex = i; }
     }
-    if (textAttribute(file.id, temperature, "units") != "K")
-        throw std::runtime_error("Expected T2M temperature units K (kelvin).");
-
-    const auto latitudes = coordinate(file.id, variable(file.id, "lat"), ids[1]);
-    const auto longitudes = coordinate(file.id, variable(file.id, "lon"), ids[2]);
-    const int timeId = variable(file.id, "time");
-    const auto times = coordinate(file.id, timeId, ids[0]);
-    loaded.latitudeCount = latitudes.size();
-    loaded.longitudeCount = longitudes.size();
-    loaded.timeUnits = textAttribute(file.id, timeId, "units");
-    loaded.calendar = textAttribute(file.id, timeId, "calendar", false);
-    loaded.firstTime = times.front();
-
-    double bestLatitude = std::numeric_limits<double>::infinity();
-    double bestLongitude = std::numeric_limits<double>::infinity();
-    for (std::size_t i = 0; i < latitudes.size(); ++i) {
-        if (latitudes[i] < -90 || latitudes[i] > 90) throw std::runtime_error("Latitude outside [-90, 90].");
-        const double distance = std::abs(latitudes[i] - latitude);
-        if (distance < bestLatitude) { bestLatitude = distance; loaded.latitudeIndex = i; }
+    for (std::size_t i = 0; i < input.longitudes.size(); ++i) {
+        const double distance = std::abs(std::remainder(input.longitudes[i] - longitude, 360.0));
+        if (distance < bestLon) { bestLon = distance; loaded.longitudeIndex = i; }
     }
-    for (std::size_t i = 0; i < longitudes.size(); ++i) {
-        if (longitudes[i] < -180 || longitudes[i] > 360) throw std::runtime_error("Unsupported longitude coordinate range.");
-        const double distance = std::abs(std::remainder(longitudes[i] - longitude, 360.0));
-        if (distance < bestLongitude) { bestLongitude = distance; loaded.longitudeIndex = i; }
-    }
-
-    nc_type temperatureType;
-    check(nc_inq_vartype(file.id, temperature, &temperatureType), "Could not inspect T2M type");
-    auto fill = numbers(file.id, temperature, "_FillValue");
-    if (fill.empty()) fill.push_back(defaultFill(temperatureType));
-    if (fill.size() != 1) throw std::runtime_error("Expected one _FillValue.");
-    const auto missing = numbers(file.id, temperature, "missing_value");
-    const auto timeMissing = numbers(file.id, timeId, "missing_value");
-    const auto timeFill = numbers(file.id, timeId, "_FillValue");
-    const auto validRange = numbers(file.id, temperature, "valid_range");
-    if (!validRange.empty() && (validRange.size() != 2 || !std::isfinite(validRange[0]) ||
-        !std::isfinite(validRange[1]) || validRange[0] > validRange[1]))
-        throw std::runtime_error("Invalid T2M valid_range.");
-    const double validMin = scalar(file.id, temperature, "valid_min", -std::numeric_limits<double>::infinity());
-    const double validMax = scalar(file.id, temperature, "valid_max", std::numeric_limits<double>::infinity());
-    const double scale = scalar(file.id, temperature, "scale_factor", 1);
-    const double offset = scalar(file.id, temperature, "add_offset", 0);
-    if (validMin > validMax) throw std::runtime_error("T2M valid_min exceeds valid_max.");
-
-    for (std::size_t t = 0; t < times.size(); ++t) {
-        if (matches(times[t], timeFill) || matches(times[t], timeMissing))
-            throw std::runtime_error("Missing time coordinate.");
-        Record record;
-        record.timestamp = decodeTimestamp(times[t], loaded.timeUnits, loaded.calendar);
-        record.date = parseMonth(record.timestamp.substr(0, 7));
-        record.latitude = latitudes[loaded.latitudeIndex];
-        record.longitude = std::remainder(longitudes[loaded.longitudeIndex], 360.0);
-        record.source = path.generic_string();
+    const auto source = path.generic_string();
+    for (std::size_t t = 0; t < input.times.size(); ++t) {
         const std::size_t index[] = {t, loaded.latitudeIndex, loaded.longitudeIndex};
         double raw = 0;
-        check(nc_get_var1_double(file.id, temperature, index, &raw), "Could not read temperature");
-        const bool outOfRange = raw < validMin || raw > validMax ||
-            (!validRange.empty() && (raw < validRange[0] || raw > validRange[1]));
-        if (!std::isfinite(raw) || matches(raw, fill) || matches(raw, missing)) record.status = "missing_value";
-        else if (outOfRange) record.status = "outside_valid_range";
-        else {
-            const double value = raw * scale + offset;
-            if (!std::isfinite(value) || value < 0) record.status = "invalid_temperature";
-            else record.kelvin = value;
-        }
-        loaded.records.push_back(std::move(record));
+        check(nc_get_var1_double(input.file.id, input.temperature, index, &raw), "Could not read temperature");
+        loaded.records.push_back(input.record(raw, t, loaded.latitudeIndex, loaded.longitudeIndex, source));
     }
-    file.close();
+    input.file.close();
+    return loaded;
+}
+
+LoadedRegion readRegion(const std::filesystem::path& path, const GeographicBounds& bounds) {
+    validateBounds(bounds);
+    Input input(path);
+    uniqueAxis(input.latitudes, false);
+    uniqueAxis(input.longitudes, true);
+    LoadedRegion loaded;
+    loaded.latitudes = input.latitudes;
+    loaded.longitudes = input.longitudes;
+    loaded.timeUnits = input.timeUnits;
+    loaded.calendar = input.calendar;
+    std::vector<std::size_t> selectedLongitudes;
+    for (std::size_t j = 0; j < input.longitudes.size(); ++j) {
+        const double lon = std::remainder(input.longitudes[j], 360.0);
+        if (lon >= bounds.west && lon <= bounds.east) selectedLongitudes.push_back(j);
+    }
+    const auto source = path.generic_string();
+    for (std::size_t i = 0; i < input.latitudes.size(); ++i) {
+        const double lat = input.latitudes[i];
+        if (lat < bounds.south || lat > bounds.north) continue;
+        const auto base = loaded.cells.size();
+        for (auto j : selectedLongitudes) {
+            GridCell cell{i, j, lat, std::remainder(input.longitudes[j], 360.0), {}};
+            cell.records.reserve(input.times.size());
+            loaded.cells.push_back(std::move(cell));
+        }
+        // Read contiguous longitude runs, one time/latitude row at a time.
+        // This avoids reopening the file for each cell or allocating a global cube.
+        for (std::size_t first = 0; first < selectedLongitudes.size();) {
+            std::size_t last = first + 1;
+            while (last < selectedLongitudes.size() && selectedLongitudes[last] == selectedLongitudes[last - 1] + 1) ++last;
+            const std::size_t count[] = {1, 1, last - first};
+            std::vector<double> raw(last - first);
+            for (std::size_t t = 0; t < input.times.size(); ++t) {
+                const std::size_t start[] = {t, i, selectedLongitudes[first]};
+                check(nc_get_vara_double(input.file.id, input.temperature, start, count, raw.data()), "Could not read regional temperature row");
+                for (std::size_t k = first; k < last; ++k)
+                    loaded.cells[base + k].records.push_back(input.record(raw[k - first], t, i, selectedLongitudes[k], source));
+            }
+            first = last;
+        }
+    }
+    input.file.close();
     return loaded;
 }
 
