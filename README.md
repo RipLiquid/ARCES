@@ -5,28 +5,7 @@
 A C++20 tool for extracting NASA MERRA-2 temperature records, building monthly and
 annual time series, and estimating environmental trends at a selected grid location.
 
-Inspired by the [NASA Space Apps Earth System Trend Detective challenge](https://www.spaceappschallenge.org/2026/challenges/earth-system-trend-detective/).
-ARCES is an independent project, not affiliated with or endorsed by NASA.
 
-## What works now
-
-The **0.3.0 development milestone** implements the path from monthly NetCDF data
-through trend analysis:
-
-- Read `T2M` at the nearest latitude-longitude grid location.
-- Decode supported time metadata and export dated CSV records.
-- Combine a directory of monthly files, or all time steps in one file.
-- Sort by dates; reject duplicate months and changing selected grid coordinates.
-- Decode packed temperatures and flag missing or out-of-range values.
-- Report gaps and incomplete years without filling missing observations.
-- Calculate calendar-day-weighted annual means from 12 valid months.
-- Fit a linear trend in degrees Celsius per decade.
-- Report approximate 95% HAC confidence intervals, approximate p-values, fit quality,
-  and a residual-correlation diagnostic.
-- Export CSV/JSON plus an offline HTML report and SVG chart.
-- Test the entire pipeline with synthetic data; no NASA account is needed for tests.
-
-Regional reading, per-cell trends and Ontario cell-centre selection are now available
 in **0.4.0-dev**. See [regional analysis](docs/REGIONAL.md) for commands, outputs,
 boundary attribution and limitations. A static SVG trend map and offline regional
 report are included. Interactive maps remain future work. This development
